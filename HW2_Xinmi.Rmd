@@ -1,6 +1,7 @@
 ---
 title: "Machine Learning for Health Care: Homework 2"
 author: "Xinmi Li"
+andrewID: "xinmil"
 date: "February 27, 2017"
 output:
   html_document:
@@ -65,28 +66,33 @@ tree = data.frame( # do not change "tree"
 )
 
 predictOddsOnDataSet = function(tree, data, active = 1) {
+  # get the predicted odds for each row in data
   apply(data, 1, (function(x) {predictedOdds(tree=tree, x, active=1)})  )
 }
 
-predictedOdds = function(tree, datum, active = 1) {
+predictedOdds = function(tree, datum, active = 1) { # active is the node#
   
   if(is.na(tree[active,"splitVariable"])) { # leaf of tree, so output value
     
     return(tree$odds[active])
     
-  } else {                                  # internal node of tree, so continue down tree to true/false child
+  } else { # internal node of tree, so continue down tree to true/false child
     
-    if( (datum[[tree[active,"splitVariable"] %>% as.character]] %>% as.character) == tree[active,"split"])
-      return(predictedOdds(tree, datum, active = tree[active,trueChild]))
-    
-    else
-      return(predictedOdds(tree, datum, active = tree[active,falseChild]))
+    # Categorize datum by comparing the variable value with the n split variable (n=active) in tree. With the split criterion in tree met, set the active as the true child node#, and try to get the odds OR split the child variable again... until get the odds
+    if((datum[[tree[active,"splitVariable"] %>% as.character]] %>% as.character) == tree[active,"split"]) { 
+      return(predictedOdds(tree, datum, active = tree[active,"trueChild"]))
+    } else { 
+      # with the split criterion in tree not met, set the active as the false child node#, and try to get the odds OR split the child variable again... until get the odds
+      return(predictedOdds(tree, datum, active = tree[active,"falseChild"]))
+    }
     
   }
   
 }
 
 # goal: run predictOddsOnDataSet(tree, depressionData)
+predicted.odds <- predictOddsOnDataSet(tree, depressionData)
+predicted.odds
 ```
   
 First, verify to yourself that, for the fourth patient in ```depressionData```, the tree should have output an odds of 0.1.
@@ -94,10 +100,16 @@ First, verify to yourself that, for the fourth patient in ```depressionData```, 
 Fix the function ```predictedOdds``` so that ```predictedOddsOnDataSet``` outputs the odds for each patient in data. Use the debugger functions like ```debugOnce(predictedOdds)``` or ```browser()``` to inspect the code. 
 
 What did you change?
-[response required]
+
+<font color="#157515">
+Quote marks around trueChild and falseChild added, so the active will be set as the true/false child node of the current internal node.
+</font>
 
 Add a column of the predicted probabilities of hospitalization to depressionData. Display it.
-[response required]
+```{r, echo=FALSE}
+depressionData$predicted.prob <- predicted.odds/(1+predicted.odds)
+depressionData
+```
 
 Using a threshold probability of 0.5, what is:
 
@@ -107,13 +119,46 @@ Using a threshold probability of 0.5, what is:
 - the precision of the model?
 - the recall of the model?
 
-[responses required]  
+```{r}
+prediction <- depressionData$predicted.prob >= 0.5 
+prediction
+TP <- sum(as.numeric(depressionData$hospitalized == 1 & prediction == 1))
+FP <- sum(as.numeric(depressionData$hospitalized == 0 & prediction == 1))
+TN <- sum(as.numeric(depressionData$hospitalized == 0 & prediction == 0))
+FN <- sum(as.numeric(depressionData$hospitalized == 1 & prediction == 0))
+```
+
+<font color="#157515">
+The accuracy is `r (TP+TN)/4`.
+The sensitivity is `r TP/(TP+FN)`.
+The specificity is `r TN/(TN+FP)`.
+The precision is `r TP/(TP+FP)`.
+The recall is `r TP/(TP+FN)`.
+</font>
 
 Suppose you want to know the prevalence of diabetes in Pittsburgh. If you randomly survey 10 Pittsburghers and 5 of them state they have diabetes:
 
 - what is the maximum likelihood estimate for the prevalence of diabetes?
+```{r, echo=FALSE}
+p <- seq(0,1,0.001)
+MLE <- p[which.max(dbeta(p, shape1 = 5, shape2 = 5))]
+MLE
+```
+
+<font color="#157515">
+The maximum likelihood estimate is 0.5.
+</font>
+
 - given your strong belief specified by a beta prior of $\alpha = 11, \beta = 21$, what is the maximum a posteriori estimate for the prevalence of diabetes?
-[responses required]  
+
+```{r, echo=FALSE}
+MLE.new <- p[which.max(dbeta(p, shape1 = 5+11, shape2 = 5+21))]
+MLE.new
+```
+
+<font color="#157515">
+With prior belief, the maximum posteriori estimate is 0.375.
+</font>
 
 ## Part 2: Analysis (9 points)
 
