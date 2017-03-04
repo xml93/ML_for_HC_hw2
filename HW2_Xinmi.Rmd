@@ -47,6 +47,7 @@ Your git repository should contain at least two commits with useful comments on 
 
 The code that follows introduces a toy data set, decision tree model, and two prediction functions.
 ```{r eval=T, message=F}
+library(plyr)
 library(dplyr)
 
 # synthetic depression data
@@ -106,7 +107,7 @@ Quote marks around trueChild and falseChild added, so the active will be set as 
 </font>
 
 Add a column of the predicted probabilities of hospitalization to depressionData. Display it.
-```{r, echo=FALSE}
+```{r}
 depressionData$predicted.prob <- predicted.odds/(1+predicted.odds)
 depressionData
 ```
@@ -121,7 +122,6 @@ Using a threshold probability of 0.5, what is:
 
 ```{r}
 prediction <- depressionData$predicted.prob >= 0.5 
-prediction
 TP <- sum(as.numeric(depressionData$hospitalized == 1 & prediction == 1))
 FP <- sum(as.numeric(depressionData$hospitalized == 0 & prediction == 1))
 TN <- sum(as.numeric(depressionData$hospitalized == 0 & prediction == 0))
@@ -139,7 +139,7 @@ The recall is `r TP/(TP+FN)`.
 Suppose you want to know the prevalence of diabetes in Pittsburgh. If you randomly survey 10 Pittsburghers and 5 of them state they have diabetes:
 
 - what is the maximum likelihood estimate for the prevalence of diabetes?
-```{r, echo=FALSE}
+```{r}
 p <- seq(0,1,0.001)
 MLE <- p[which.max(dbeta(p, shape1 = 5, shape2 = 5))]
 MLE
@@ -151,7 +151,7 @@ The maximum likelihood estimate is 0.5.
 
 - given your strong belief specified by a beta prior of $\alpha = 11, \beta = 21$, what is the maximum a posteriori estimate for the prevalence of diabetes?
 
-```{r, echo=FALSE}
+```{r}
 MLE.new <- p[which.max(dbeta(p, shape1 = 5+11, shape2 = 5+21))]
 MLE.new
 ```
@@ -170,26 +170,128 @@ With prior belief, the maximum posteriori estimate is 0.375.
 
 - **V, W:** describe the covariates included and the population being studied.
 
-[responses required]
+<font color="#157515">
+**Y:**
+
+The primary outcomes are: (a) the incidence of death from any cause within 14 days, with the variable name "ID14", and (b) the incidence of death or dependency at 6 months, with the variable name "FDEAD" and "FDENNIS".
+
+**U:**
+
+The variable names for intervention are: "RXASP" with possible values {Y, N} and "RXHEP" with possible values {M, L, N}.
+
+**V, W:** 
+
+The covariates are delay in hours from symptoms, age, sex, onset conditions, conscious level, cardiac rhythm, systolic BP, stroke syndrom, leg weakness, CT scan, appearance of pre-randomisation CT, and pre-randomisation antithrombotic therapy.
+
+The studied population are 19435 patients who are eligible if: (a) with evidence of an acute stroke with onset less than 48 hours previously, (b) with no evidence of intracranial haemorrhage, and (c) with no clear indications for orcontradications to heparin or aspirin. The fundamental criterion is physician's uncertaining whether or not to assign either or both of the trial treatments to the particular patient. 
+The exclusions are: only a small likelihood of worthwhile benefit or a high risk of adverse effects on the patiens.
+</font>
+
 
 - Construct a so-called Table 1 for groups of {aspirin, no aspirin} use, including information on age, gender, systolic blood pressure, and conscious state.
 
-[response required]
+```{r}
+IST <- data.frame(read.csv(file = "/Users/Xinmi/git/ML_for_HC_hw2/IST.csv", header = TRUE))
+Table1 <- IST %>%
+  subset(select = c("RXASP", "AGE", "SEX", "RSBP","RCONSC")) %>%
+  transform(RXASP = as.numeric(RXASP == "Y"))
+colnames(Table1) <- (c("Aspirin", "Age", "Sex", "SystolicBP", "Consicousness"))
+head(Table1)
+```
+
 
 #### Machine learning analysis
 Note: for this analysis, use a simple 50-50 train-test split.
 
 Let our outcome of interest be "dead or dependent at 6 months", i.e. so that we have a binary classification problem. What percent of patients are dead or dependent at 6 months in your train set and test set?
-[response required]
+```{r}
+ordering <- sample(1:nrow(IST))
+train <- IST[ordering[1:50],]
+test <- IST[ordering[(length(ordering)-50+1):length(ordering)], ]
+```
+
+<font color="#157515">
+The percent of patients dead or dependent at 6 months is `r round((sum(as.numeric(train$FDEAD=="Y")) + sum(as.numeric(train$FDENNIS=="Y")))/nrow(train) * 100, 2)`% in the train set and `r round((sum(as.numeric(test$FDEAD=="Y")) + sum(as.numeric(test$FDENNIS=="Y")))/nrow(test) * 100, 2)`% in the test set.
+</font>
 
 Choose which variables to include in your model. For example, remove variables for outcomes at 14 days (because if you are dead at 14 days you are certainly dead at 6 months). Moreover, you should remove all features measured after baseline if you want to make a prediction based on baseline data. Similarly, specific indicators of the outcome should also be removed, since those are measurements past the baseline that are not our outcome of interest. For these reasons, you will need to remove clusters of variables. Justify your approach.
-[response required]
+```{r}
+y <- c("FDEAD", "FDENNIS")
+v <- c("RDELAY", "RCONSC", "SEX", "AGE", "RSLEEP", "RATRIAL", "RCT", "RVISINF", "RHEP24", "RASP3", "RSBP", "STYPE")
+u <- c("RXASP", "RXHEP")
+
+train <- train %>%
+  subset(select = c(y, v, u)) %>%
+  transform(Outcome = as.numeric(FDEAD == "Y" | FDENNIS == "Y")) %>%
+  subset(select = -c(FDEAD, FDENNIS))
+
+test <- test %>%
+  subset(select = c(y, v, u)) %>%
+  transform(Outcome = as.numeric(FDEAD == "Y" | FDENNIS == "Y")) %>%
+  subset(select = -c(FDEAD, FDENNIS))
+```
+
+<font color="#157515">
+Only outcomes, covariates, and intervention variables are kept in the train and test sets. The outcome is transformed into a binary value that uses 1 for "death or dependency at 6 months". 
+</font>
+
 
 Of the remaining variables, decide whether to exclude variables with missing data, impute them, and/or use indicator variables. (Note that if you choose multiple imputation for some variables, you would need to pool the results when evaluating performance, however for homework you may just use the first imputed data set). Justify your approach.
-[response required]
+```{r}
+library(mice)
+library(lattice)
+
+train <- train %>%
+  apply(2, function(x) {mapvalues(x, "", NA)}) %>%
+  as.data.frame()
+
+test <- test %>%
+  apply(2, function(x) {mapvalues(x, "", NA)}) %>%
+  as.data.frame()
+
+md.pattern(train)
+md.pattern(test)
+
+train.imp <- mice(data = train, m = 5, maxit = 20, seed = 0)
+
+train.complete <- complete(train.imp,1)
+```
+<font color="#157515">
+Since the missing percentage of each column is small, the missing values are very likely to miss at random. All variables should be included. 
+</font>
+
+
 
 Use the following machine learning algorithms: logistic regression, naive Bayes, Tree Augmented Naive Bayes, and decision tree (specify any parameters you set that are not the default). The packages that you may find useful here are: "glm", "bnlearn", and "rpart", but you may use others if desired. In a table, report the accuracy with 95% confidence intervals for each algorithm.
-[response required]
+
+Logistic Regression
+```{r}
+train.lr <- train.complete %>%
+  transform(RDELAY = as.numeric(RDELAY), AGE = as.numeric(AGE), RSBP = as.numeric(RSBP))%>%  
+  subset(select = apply(train.complete, 2, function(x) {length(unique(x))}>1))
+
+lr <- glm(Outcome == 1 ~ ., family=binomial(link="logit"), data = train.lr)
+summary(lr)
+
+# Change the factor level in test set unseen in train set into NA.
+test.lr <- test %>%
+  transform(RDELAY = as.numeric(RDELAY),
+            AGE = as.numeric(AGE),
+            RSBP = as.numeric(RSBP),
+            STYPE = mapvalues(STYPE, "OTH", NA))
+
+summary.lr <- as.vector(predict(lr, test.lr)>=0.5) %>%
+  table(test.lr$Outcome)
+summary.lr
+
+accuracy.lr <- (summary.lr[1,1]+summary.lr[2,2])/sum(colSums(summary.lr))
+error.lr <- 1 - accuracy.lr
+CI.lr.lower <- error.lr - 1.96 * sqrt(error.lr*accuracy.lr/sum(colSums(summary.lr)))
+CI.lr.upper <- error.lr + 1.96 * sqrt(error.lr*accuracy.lr/sum(colSums(summary.lr)))
+
+lr.report <- data.frame(accuracy.lr, CI.lr.lower, CI.lr.upper)
+lr.report
+```
 
 Construct an ROC (receiver operating characteristic) curve for each model and overlay them on a graph using ggplot. Include a legend.
 [response required]
@@ -200,8 +302,12 @@ Construct a PR (precision recall) curve for each model. Include a legend.
 #### Conclusions
 Let's draw conclusions from this study. Specifically,
 
-- how well are we able to predict death or dependence at 6 months? [response required]
-- what is the average treatment effect of aspirin on death or dependence at 6 months? Is aspirin significantly better than the alternative? [response required]
+- how well are we able to predict death or dependence at 6 months? 
+[response required]
+
+- what is the average treatment effect of aspirin on death or dependence at 6 months? Is aspirin significantly better than the alternative? 
+[response required]
+
 - of the algorithms tested, which algorithms perform the best? Justify your statement.
 [response required]
 
