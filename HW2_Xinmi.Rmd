@@ -278,7 +278,7 @@ test.lr <- test %>%
   transform(RDELAY = as.numeric(RDELAY),
             AGE = as.numeric(AGE),
             RSBP = as.numeric(RSBP),
-            STYPE = mapvalues(STYPE, "OTH", NA))
+            RCONSC = mapvalues(RCONSC, "U", NA))
 
 summary.lr <- as.vector(predict(lr, test.lr)>=0.5) %>%
   table(test.lr$Outcome)
@@ -286,8 +286,8 @@ summary.lr
 
 accuracy.lr <- (summary.lr[1,1]+summary.lr[2,2])/sum(colSums(summary.lr))
 error.lr <- 1 - accuracy.lr
-CI.lr.lower <- error.lr - 1.96 * sqrt(error.lr*accuracy.lr/sum(colSums(summary.lr)))
-CI.lr.upper <- error.lr + 1.96 * sqrt(error.lr*accuracy.lr/sum(colSums(summary.lr)))
+CI.lr.lower <- accuracy.lr - 1.96 * sqrt(error.lr*accuracy.lr/sum(colSums(summary.lr)))
+CI.lr.upper <- accuracy.lr + 1.96 * sqrt(error.lr*accuracy.lr/sum(colSums(summary.lr)))
 
 lr.report <- data.frame(accuracy.lr, CI.lr.lower, CI.lr.upper)
 lr.report
