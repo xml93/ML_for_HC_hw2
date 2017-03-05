@@ -204,7 +204,7 @@ head(Table1)
 Note: for this analysis, use a simple 50-50 train-test split.
 
 Let our outcome of interest be "dead or dependent at 6 months", i.e. so that we have a binary classification problem. What percent of patients are dead or dependent at 6 months in your train set and test set?
-```{r}
+```{r, cache=TRUE}
 ordering <- sample(1:nrow(IST))
 train <- IST[ordering[1:50],]
 test <- IST[ordering[(length(ordering)-50+1):length(ordering)], ]
@@ -220,12 +220,12 @@ y <- c("FDEAD", "FDENNIS")
 v <- c("RDELAY", "RCONSC", "SEX", "AGE", "RSLEEP", "RATRIAL", "RCT", "RVISINF", "RHEP24", "RASP3", "RSBP", "STYPE")
 u <- c("RXASP", "RXHEP")
 
-train <- train %>%
+train2 <- train %>%
   subset(select = c(y, v, u)) %>%
   transform(Outcome = as.numeric(FDEAD == "Y" | FDENNIS == "Y")) %>%
   subset(select = -c(FDEAD, FDENNIS))
 
-test <- test %>%
+test2 <- test %>%
   subset(select = c(y, v, u)) %>%
   transform(Outcome = as.numeric(FDEAD == "Y" | FDENNIS == "Y")) %>%
   subset(select = -c(FDEAD, FDENNIS))
@@ -241,20 +241,22 @@ Of the remaining variables, decide whether to exclude variables with missing dat
 library(mice)
 library(lattice)
 
-train <- train %>%
+train3 <- train2 %>%
   apply(2, function(x) {mapvalues(x, "", NA)}) %>%
   as.data.frame()
 
-test <- test %>%
+test3 <- test2 %>%
   apply(2, function(x) {mapvalues(x, "", NA)}) %>%
   as.data.frame()
 
-md.pattern(train)
-md.pattern(test)
+md.pattern(train3)
+md.pattern(test3)
 
-train.imp <- mice(data = train, m = 5, maxit = 20, seed = 0)
+train.imp <- mice(data = train3, m = 5, maxit = 20, seed = 0)
+test.imp <- mice(data = test3, m = 5, maxit = 20, seed = 0)
 
 train.complete <- complete(train.imp,1)
+test.complete <- complete(test.imp,1)
 ```
 <font color="#157515">
 Since the missing percentage of each column is small, the missing values are very likely to miss at random. All variables should be included. 
@@ -267,21 +269,59 @@ Use the following machine learning algorithms: logistic regression, naive Bayes,
 Logistic Regression
 ```{r}
 train.lr <- train.complete %>%
-  transform(RDELAY = as.numeric(RDELAY), AGE = as.numeric(AGE), RSBP = as.numeric(RSBP))%>%  
-  subset(select = apply(train.complete, 2, function(x) {length(unique(x))}>1))
+  transform(RDELAY = as.numeric(RDELAY), AGE = as.numeric(AGE), RSBP = as.numeric(RSBP))
 
-lr <- glm(Outcome == 1 ~ ., family=binomial(link="logit"), data = train.lr)
+test.lr <- test.complete %>%
+  transform(RDELAY = as.numeric(RDELAY), AGE = as.numeric(AGE), RSBP = as.numeric(RSBP))
+
+# Remove the factors with less than 2 levels.
+col.level <- function(x, col) {
+  if (is.factor(x[,col])) {
+    length(levels(x[,col]))
+  } else {999}
+}
+
+train.lr.remove <- 0
+for (i in 1:ncol(train.lr)) {
+  if (col.level(train.lr, i) < 2) {
+    train.lr.remove <- c(train.lr.remove, i)
+  } 
+}
+
+test.lr.remove <- 0
+for (i in 1:ncol(test.lr)) {
+  if (col.level(test.lr, i) < 2) {
+    test.lr.remove <- c(test.lr.remove, i)
+  } 
+}
+
+train.lr2 <- train.lr[,-c(train.lr.remove[-1], test.lr.remove[-1])] 
+test.lr2 <- test.lr[,-c(train.lr.remove[-1], test.lr.remove[-1])] 
+
+
+# Remove the row in test set with level of factors not seen in train set (unable to predict) and drop the unused levels.
+test.lr.rowdis <- 0
+for (i in 1:ncol(test.lr2)) {
+  for (j in 1:nrow(test.lr2)) {
+    if (is.factor(test.lr2[,i]) & !(test.lr2[j,i] %in% train.lr2[,i])) {
+      test.lr.rowdis <- c(test.lr.rowdis, j)
+    }
+  }
+}
+
+train.lr3 <- droplevels.data.frame(train.lr2)
+ 
+test.lr3 <- test.lr2[-test.nb.rowdis[-1],] %>%
+  droplevels.data.frame
+
+# Build the model, fit and test it. 
+lr <- glm(Outcome == 1 ~ ., family=binomial(link="logit"), data = train.lr3)
 summary(lr)
 
-# Change the factor level in test set unseen in train set into NA.
-test.lr <- test %>%
-  transform(RDELAY = as.numeric(RDELAY),
-            AGE = as.numeric(AGE),
-            RSBP = as.numeric(RSBP),
-            RCONSC = mapvalues(RCONSC, "U", NA))
+predict.lr <- predict(lr, test.lr3)
 
-summary.lr <- as.vector(predict(lr, test.lr)>=0.5) %>%
-  table(test.lr$Outcome)
+summary.lr <- as.vector(predict.lr>=0.5) %>%
+  table(test.lr3$Outcome)
 summary.lr
 
 accuracy.lr <- (summary.lr[1,1]+summary.lr[2,2])/sum(colSums(summary.lr))
@@ -293,22 +333,327 @@ lr.report <- data.frame(accuracy.lr, CI.lr.lower, CI.lr.upper)
 lr.report
 ```
 
+
+Naive Bayes
+```{r}
+library(bnlearn)
+train.nb <- train.complete %>%
+  transform(RDELAY = as.numeric(RDELAY), AGE = as.numeric(AGE), RSBP = as.numeric(RSBP))
+
+test.nb <- test.complete %>%
+  transform(RDELAY = as.numeric(RDELAY), AGE = as.numeric(AGE), RSBP = as.numeric(RSBP))
+
+
+# Remove the factors with less than 2 levels.
+train.nb.remove <- 0
+for (i in 1:ncol(train.nb)) {
+  if (col.level(train.nb, i) < 2) {
+    train.nb.remove <- c(train.nb.remove, i)
+  } 
+}
+
+test.nb.remove <- 0
+for (i in 1:ncol(test.nb)) {
+  if (col.level(test.nb, i) < 2) {
+    test.nb.remove <- c(test.nb.remove, i)
+  } 
+}
+
+# Discretize doesn't work here. Factors transformed from numeric values are still multiple levels after discretization and can't be used to predict outcomes if new factor level appears in test set. Ang since the train and test set are discretize respectively, here I set the same cutoff by using the quantile of train set.
+
+nb.rdelay.break <- quantile(IST$RDELAY, seq(0, 1, 0.25))
+nb.age.break <- quantile(train.nb$AGE, seq(0, 1, 0.25))
+nb.rsbp.break <- quantile(train.nb$RSBP, seq(0, 1, 0.25))
+
+train.nb2 <- train.nb[,-c(train.nb.remove[-1], test.nb.remove[-1])] %>%
+  transform(RDELAY = cut(train.nb$RDELAY, breaks = nb.rdelay.break, include.lowest=TRUE), 
+            AGE = cut(train.nb$AGE, breaks = nb.age.break, include.lowest=TRUE), 
+            RSBP = cut(train.nb$RSBP, breaks = nb.rsbp.break, include.lowest=TRUE))
+
+test.nb2 <- test.nb[,-c(train.nb.remove[-1], test.nb.remove[-1])] %>%
+  transform(RDELAY = cut(test.nb$RDELAY, breaks = nb.rdelay.break, include.lowest=TRUE), 
+            AGE = cut(test.nb$AGE, breaks = nb.age.break, include.lowest=TRUE), 
+            RSBP = cut(test.nb$RSBP, breaks = nb.rsbp.break, include.lowest=TRUE))
+
+# Remove the row in test set with level of factors not seen in train set (unable to predict) and drop the unused levels.
+test.nb.rowdis <- 0
+for (i in 1:ncol(test.nb2)) {
+  for (j in 1:nrow(test.nb2)) {
+    if (!(test.nb2[j,i] %in% train.nb2[,i])) {
+      test.nb.rowdis <- c(test.nb.rowdis, j)
+    }
+  }
+}
+
+train.nb3 <- droplevels.data.frame(train.nb2)
+  
+test.nb3 <- test.nb2[-test.nb.rowdis[-1],] %>%
+  droplevels.data.frame
+  
+# Build the model, fit and test it.
+nb <- naive.bayes(train.nb3, "Outcome")
+fitted.nb <- bn.fit(nb, train.nb3)
+summary(nb)
+
+predict.nb <- predict(fitted.nb, test.nb3, prob = TRUE)
+
+summary.nb <- predict(fitted.nb, test.nb3) %>% 
+  table(test.nb3$Outcome)
+summary.nb
+
+accuracy.nb <- (summary.nb[1,1]+summary.nb[2,2])/sum(colSums(summary.nb))
+error.nb <- 1 - accuracy.nb
+CI.nb.lower <- accuracy.nb - 1.96 * sqrt(error.nb*accuracy.nb/sum(colSums(summary.nb)))
+CI.nb.upper <- accuracy.nb + 1.96 * sqrt(error.nb*accuracy.nb/sum(colSums(summary.nb)))
+
+nb.report <- data.frame(accuracy.nb, CI.nb.lower, CI.nb.upper)
+nb.report
+```
+
+Tree Augmented Naive Bayes
+```{r}
+train.tan <- train.nb3
+test.tan <- test.nb3
+
+tan <- tree.bayes(train.tan, "Outcome")
+fitted.tan <- bn.fit(tan, train.tan)
+summary(tan)
+
+predict.tan <- predict(fitted.tan, test.tan, prob = TRUE)
+
+summary.tan <- predict(fitted.tan, test.tan) %>% 
+  table(test.tan$Outcome)
+summary.tan
+
+accuracy.tan <- (summary.tan[1,1]+summary.tan[2,2])/sum(colSums(summary.tan))
+error.tan <- 1 - accuracy.tan
+CI.tan.lower <- accuracy.tan - 1.96 * sqrt(error.tan*accuracy.tan/sum(colSums(summary.tan)))
+CI.tan.upper <- accuracy.tan + 1.96 * sqrt(error.tan*accuracy.tan/sum(colSums(summary.tan)))
+
+tan.report <- data.frame(accuracy.tan, CI.tan.lower, CI.tan.upper)
+tan.report
+```
+
+Decision Tree
+```{r}
+library(rpart)
+train.dt <- train.nb3
+test.dt <- test.nb3
+
+# Build the model with the loosest constraints. 
+dt <- rpart(Outcome ~ ., data = train.dt, control=rpart.control(minsplit=2, minbucket=1, cp=0.001))
+printcp(dt)
+
+print(dt)
+plotcp(dt)
+
+# Prune the tree to minimize the cross-validation error.
+dt2 <- prune(dt, cp = 0.16)
+printcp(dt2)
+
+print(dt2)
+plotcp(dt2)
+
+# Plot the tree.
+plot(dt2, uniform=TRUE, main="Classification Tree for Outcomes")
+text(dt2, use.n=TRUE, all=TRUE, cex=.8)
+
+# Test the model.
+predict.dt <- predict(dt2, test.dt) %>%
+  as.data.frame
+  
+prediction.dt <- apply(predict.dt, 1, function(x){x[2] > x[1]})
+
+summary.dt <- as.vector(prediction.dt) %>% 
+  table(test.dt$Outcome)
+summary.dt
+
+accuracy.dt <- (summary.dt[1,1]+summary.dt[2,2])/sum(colSums(summary.dt))
+error.dt <- 1 - accuracy.dt
+CI.dt.lower <- accuracy.dt - 1.96 * sqrt(error.dt*accuracy.dt/sum(colSums(summary.dt)))
+CI.dt.upper <- accuracy.dt + 1.96 * sqrt(error.dt*accuracy.dt/sum(colSums(summary.dt)))
+
+dt.report <- data.frame(accuracy.dt, CI.dt.lower, CI.dt.upper)
+dt.report
+```
+
+
 Construct an ROC (receiver operating characteristic) curve for each model and overlay them on a graph using ggplot. Include a legend.
-[response required]
+```{r}
+library(ggplot2)
+
+# Logistic Regression
+lr.outcome <- data.frame(prob = predict.lr, obs = test.lr3$Outcome)
+lr.outcome <- lr.outcome[order(lr.outcome$prob), ]
+
+tpr.lr <- rep(0, nrow(lr.outcome))
+fpr.lr <- rep(0, nrow(lr.outcome))
+
+for (i in 1:nrow(lr.outcome)) {
+    threshold.lr <- lr.outcome$prob[i]
+    tp.lr <- sum(lr.outcome$prob > threshold.lr & lr.outcome$obs == 1)
+    fp.lr <- sum(lr.outcome$prob > threshold.lr & lr.outcome$obs == 0)
+    tn.lr <- sum(lr.outcome$prob < threshold.lr & lr.outcome$obs == 0)
+    fn.lr <- sum(lr.outcome$prob < threshold.lr & lr.outcome$obs == 1)
+    tpr.lr[i] <- tp.lr/(tp.lr+fn.lr) 
+    fpr.lr[i] <- fp.lr/(tn.lr+fp.lr)
+}
+
+# Naive Bayes
+nb.outcome <- data.frame(prob = attr(predict.nb,"prob")[2,], obs = test.nb3$Outcome)
+nb.outcome <- nb.outcome[order(nb.outcome$prob), ]
+
+tpr.nb <- rep(0, nrow(nb.outcome))
+fpr.nb <- rep(0, nrow(nb.outcome))
+
+for (i in 1:nrow(nb.outcome)) {
+    threshold.nb <- nb.outcome$prob[i]
+    tp.nb <- sum(nb.outcome$prob > threshold.nb & nb.outcome$obs == 1)
+    fp.nb <- sum(nb.outcome$prob > threshold.nb & nb.outcome$obs == 0)
+    tn.nb <- sum(nb.outcome$prob < threshold.nb & nb.outcome$obs == 0)
+    fn.nb <- sum(nb.outcome$prob < threshold.nb & nb.outcome$obs == 1)
+    tpr.nb[i] <- tp.nb/(tp.nb+fn.nb) 
+    fpr.nb[i] <- fp.nb/(tn.nb+fp.nb)
+}
+
+# Tree Augmented Naive Bayes
+tan.outcome <- data.frame(prob = attr(predict.tan,"prob")[2,], obs = test.tan$Outcome)
+tan.outcome <- tan.outcome[order(tan.outcome$prob), ]
+
+tpr.tan <- rep(0, nrow(tan.outcome))
+fpr.tan <- rep(0, nrow(tan.outcome))
+
+for (i in 1:nrow(tan.outcome)) {
+    threshold.tan <- tan.outcome$prob[i]
+    tp.tan <- sum(tan.outcome$prob > threshold.tan & tan.outcome$obs == 1)
+    fp.tan <- sum(tan.outcome$prob > threshold.tan & tan.outcome$obs == 0)
+    tn.tan <- sum(tan.outcome$prob < threshold.tan & tan.outcome$obs == 0)
+    fn.tan <- sum(tan.outcome$prob < threshold.tan & tan.outcome$obs == 1)
+    tpr.tan[i] <- tp.tan/(tp.tan+fn.tan) 
+    fpr.tan[i] <- fp.tan/(tn.tan+fp.tan)
+}
+
+
+# Decision Tree
+dt.outcome <- data.frame(prob = predict.dt[,2], obs = test.dt$Outcome)
+dt.outcome <- dt.outcome[order(dt.outcome$prob), ]
+
+tpr.dt <- rep(0, nrow(dt.outcome))
+fpr.dt <- rep(0, nrow(dt.outcome))
+
+for (i in 1:nrow(dt.outcome)) {
+    threshold.dt <- nb.outcome$prob[i]
+    tp.dt <- sum(dt.outcome$prob > threshold.dt & dt.outcome$obs == 1)
+    fp.dt <- sum(dt.outcome$prob > threshold.dt & dt.outcome$obs == 0)
+    tn.dt <- sum(dt.outcome$prob < threshold.dt & dt.outcome$obs == 0)
+    fn.dt <- sum(dt.outcome$prob < threshold.dt & dt.outcome$obs == 1)
+    tpr.dt[i] <- tp.dt/(tp.dt+fn.dt) 
+    fpr.dt[i] <- fp.dt/(tn.dt+fp.dt)
+}
+
+
+# ROC Curve Plot. Unfortunately, there are too many NaN values in predicted probability for TAN, so the tpr.tan and fpr.tan cannot be ploted.
+ROCdata.lr <- data.frame(TPR = tpr.lr, FPR =fpr.lr, method = "Logistic Regression")
+ROCdata.nb <- data.frame(TPR = tpr.nb, FPR =fpr.nb, method = "Naive Bayes")
+ROCdata.dt <- data.frame(TPR = tpr.dt, FPR =fpr.dt, method = "Decision Tree")
+
+ROCdata <- rbind(ROCdata.lr, ROCdata.nb, ROCdata.dt)
+
+ggplot(data = ROCdata, aes(x = FPR, y = TPR, color = factor(method))) + 
+         geom_point(size = 1.5) + xlim(0, 1)
+```
 
 Construct a PR (precision recall) curve for each model. Include a legend.
-[response required]
+```{r}
+# Logistic Regression
+
+prec.lr <- rep(0, nrow(lr.outcome))
+
+for (i in 1:nrow(lr.outcome)) {
+    threshold.lr <- lr.outcome$prob[i]
+    tp.lr <- sum(lr.outcome$prob > threshold.lr & lr.outcome$obs == 1)
+    fp.lr <- sum(lr.outcome$prob > threshold.lr & lr.outcome$obs == 0)
+    tn.lr <- sum(lr.outcome$prob < threshold.lr & lr.outcome$obs == 0)
+    fn.lr <- sum(lr.outcome$prob < threshold.lr & lr.outcome$obs == 1)
+    prec.lr[i] <- tp.lr/(tp.lr+fp.lr)
+}
+
+
+# Naive Bayes
+
+prec.nb <- rep(0, nrow(nb.outcome))
+
+for (i in 1:nrow(nb.outcome)) {
+    threshold.nb <- nb.outcome$prob[i]
+    tp.nb <- sum(nb.outcome$prob > threshold.nb & nb.outcome$obs == 1)
+    fp.nb <- sum(nb.outcome$prob > threshold.nb & nb.outcome$obs == 0)
+    tn.nb <- sum(nb.outcome$prob < threshold.nb & nb.outcome$obs == 0)
+    fn.nb <- sum(nb.outcome$prob < threshold.nb & nb.outcome$obs == 1)
+    prec.nb[i] <- tp.nb/(tp.nb+fp.nb)
+}
+
+
+# Tree Augmented Naive Bayes
+
+prec.tan <- rep(0, nrow(tan.outcome))
+
+for (i in 1:nrow(tan.outcome)) {
+    threshold.tan <- tan.outcome$prob[i]
+    tp.tan <- sum(tan.outcome$prob > threshold.tan & tan.outcome$obs == 1)
+    fp.tan <- sum(tan.outcome$prob > threshold.tan & tan.outcome$obs == 0)
+    tn.tan <- sum(tan.outcome$prob < threshold.tan & tan.outcome$obs == 0)
+    fn.tan <- sum(tan.outcome$prob < threshold.tan & tan.outcome$obs == 1)
+    prec.tan[i] <- tp.tan/(tp.tan+fp.tan)
+}
+
+
+# Decision Tree
+
+prec.dt <- rep(0, nrow(dt.outcome))
+
+for (i in 1:nrow(dt.outcome)) {
+    threshold.dt <- nb.outcome$prob[i]
+    tp.dt <- sum(dt.outcome$prob > threshold.dt & dt.outcome$obs == 1)
+    fp.dt <- sum(dt.outcome$prob > threshold.dt & dt.outcome$obs == 0)
+    tn.dt <- sum(dt.outcome$prob < threshold.dt & dt.outcome$obs == 0)
+    fn.dt <- sum(dt.outcome$prob < threshold.dt & dt.outcome$obs == 1)
+    prec.dt[i] <- tp.dt/(tp.dt+fp.dt)
+}
+
+
+# PR Curve Plot. Unfortunately, there are too many NaN values in predicted probability for TAN, so the tpr.tan and prec.tan cannot be ploted.
+PRdata.lr <- data.frame(Recall = tpr.lr, Precision =fpr.lr, method = "Logistic Regression")
+PRdata.nb <- data.frame(Recall = tpr.nb, Precision =fpr.nb, method = "Naive Bayes")
+PRdata.dt <- data.frame(Recall = tpr.dt, Precision =fpr.dt, method = "Decision Tree")
+
+PRdata <- rbind(PRdata.lr, PRdata.nb, PRdata.dt)
+
+ggplot(data = PRdata, aes(x = Recall, y = Precision, color = factor(method))) + 
+         geom_point(size = 1.5) + xlim(0, 1)
+
+
+# Apparently, the PR curve is not correct here...
+```
 
 #### Conclusions
 Let's draw conclusions from this study. Specifically,
 
 - how well are we able to predict death or dependence at 6 months? 
-[response required]
+
+<font color="#157515">
+Regarding the accuracy, the four models do not perform well on the prediction.
+</font>
 
 - what is the average treatment effect of aspirin on death or dependence at 6 months? Is aspirin significantly better than the alternative? 
-[response required]
+
+<font color="#157515">
+The average treatment effect of aspirin is `r round(6000/9720 - 6125/9715, 2)`. The decrease of death or dependence in 6 months of aspirin-allocated patients is not significant compared with non-aspirin group (with p-value of 0.06).
+</font>
 
 - of the algorithms tested, which algorithms perform the best? Justify your statement.
-[response required]
+
+<font color="#157515">
+Based on the accuracy, the tree augmented bayes perform better than other three algorithms. And the ROC curve tells naive bayes perform better than logistic regression and decision tree, while the TAN model is not included. But TAN should perform better than BN. I suppose that TAN perform the best.
+</font>
 
 Congratulations, you've conducted a comparison of machine learning algorithms for mortality prediction! Commit your solutions to your git repository with an informative comment. ```git push``` will help you upload it to the cloud service you choose to use (github, bitbucket, etc).
